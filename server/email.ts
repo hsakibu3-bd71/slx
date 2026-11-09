@@ -6,19 +6,14 @@ export async function sendEmailNotification(
   roomDetails?: { user_name: string; user_email: string },
   recipientOverride?: string
 ) {
-  // Only text messages are forwarded via email as requested: "শুধু মাত্র ফাইল ছবি ও ভিদিও বাদ এ"
-  if (message.message_type !== 'text') {
-    return { success: true, skipped: true, reason: 'Media excluded from email forwarding' };
-  }
-
   const settings = dbService.getSettings();
   const adminEmail = settings.admin_email || 'mesakibu4@gmail.com';
   const siteName = settings.site_name || 'Sakib Hasan Live';
   const appUrl = process.env.APP_URL || 'http://localhost:3000';
 
   // Determine recipient:
-  // If user sent it -> recipient is admin (Sakib Hasan)
-  // If admin sent it -> recipient is visitor's email!
+  // If user sent it -> recipient is admin (Sakib Hasan: mesakibu4@gmail.com)
+  // If admin sent it -> recipient is visitor's email
   const isFromUser = message.sender_type === 'user';
   const recipient = recipientOverride || (isFromUser ? adminEmail : (roomDetails?.user_email || message.sender_email || ''));
 
@@ -30,8 +25,25 @@ export async function sendEmailNotification(
   const senderEmail = message.sender_email || (isFromUser ? 'visitor@guest.com' : adminEmail);
   const actionUrl = isFromUser ? `${appUrl}/join?room=${message.room_id}` : `${appUrl}?room=${message.room_id}`;
 
+  let typeBadge = '💬 Message';
+  let previewText = message.text || '';
+
+  if (message.message_type === 'audio') {
+    typeBadge = '🎙️ Voice Note';
+    previewText = `🎙️ Voice Note (${message.file_name || 'Audio message'})`;
+  } else if (message.message_type === 'image') {
+    typeBadge = '📷 Photo';
+    previewText = `📷 Photo attachment: ${message.file_name || 'Image'}`;
+  } else if (message.message_type === 'file') {
+    typeBadge = '📎 File';
+    previewText = `📎 File attachment: ${message.file_name || 'Document'}`;
+  } else if (message.message_type === 'call_log') {
+    typeBadge = '📞 Call';
+    previewText = `📞 Call notification: ${message.text || 'Call session'}`;
+  }
+
   const subject = isFromUser
-    ? `[${siteName}] New Message from ${senderName} (${senderEmail})`
+    ? `[${siteName}] ${typeBadge} from ${senderName} (${senderEmail})`
     : `[${siteName}] Reply from Sakib Hasan`;
 
   const htmlContent = `
@@ -49,6 +61,7 @@ export async function sendEmailNotification(
         .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; color: #a1a1aa; }
         .meta-table td { padding: 6px 0; }
         .meta-table td.label { color: #71717a; width: 120px; }
+        .badge { display: inline-block; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; color: #ffffff; }
         .btn { display: inline-block; background-color: #ffffff; color: #000000; text-decoration: none; padding: 12px 26px; border-radius: 10px; font-weight: 600; font-size: 13px; text-align: center; }
         .footer { text-align: center; font-size: 11px; color: #71717a; margin-top: 24px; }
       </style>
@@ -57,10 +70,14 @@ export async function sendEmailNotification(
       <div class="card">
         <div class="header">
           <h2 class="title">${siteName}</h2>
-          <p class="subtitle">${isFromUser ? 'A visitor sent you a message via the live chat.' : 'Sakib Hasan replied to your conversation.'}</p>
+          <p class="subtitle">${isFromUser ? `A visitor sent you a ${typeBadge.toLowerCase()} via the live portal.` : 'Sakib Hasan replied to your conversation.'}</p>
         </div>
 
         <table class="meta-table">
+          <tr>
+            <td class="label">Type:</td>
+            <td><span class="badge">${typeBadge}</span></td>
+          </tr>
           <tr>
             <td class="label">From:</td>
             <td><strong>${senderName}</strong> (${senderEmail})</td>
@@ -75,7 +92,7 @@ export async function sendEmailNotification(
           </tr>
         </table>
 
-        <div class="message-box">${message.text}</div>
+        <div class="message-box">${previewText}</div>
 
         <div style="text-align: center; margin-top: 24px;">
           <a href="${actionUrl}" class="btn">Open Realtime Chat to Reply →</a>
@@ -90,7 +107,6 @@ export async function sendEmailNotification(
   `;
 
   const logId = 'email_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
-
   const smtpEnabled = settings.smtp_enabled === 'true' && settings.smtp_user && settings.smtp_pass;
 
   if (smtpEnabled) {
@@ -120,7 +136,7 @@ export async function sendEmailNotification(
         recipient,
         sender_name: senderName,
         subject,
-        content_preview: message.text || '',
+        content_preview: previewText,
         status: 'sent',
         details: `Delivered via SMTP (${settings.smtp_host})`,
         created_at: new Date().toISOString(),
@@ -135,7 +151,7 @@ export async function sendEmailNotification(
         recipient,
         sender_name: senderName,
         subject,
-        content_preview: message.text || '',
+        content_preview: previewText,
         status: 'error',
         details: `SMTP error: ${err.message}`,
         created_at: new Date().toISOString(),
@@ -151,9 +167,9 @@ export async function sendEmailNotification(
       recipient,
       sender_name: senderName,
       subject,
-      content_preview: message.text || '',
+      content_preview: previewText,
       status: 'simulated',
-      details: `Direct mail-to-mail transmission routed to ${recipient}. Configure Google App Password in settings for direct external SMTP delivery.`,
+      details: `Direct mail-to-mail notification routed to ${recipient}. All visitor messages (text, voice, files) trigger email notifications.`,
       created_at: new Date().toISOString(),
     });
     return { success: true, status: 'simulated' };

@@ -78,6 +78,7 @@ setDef.run('smtp_pass', '');
 setDef.run('admin_avatar', 'https://api.dicebear.com/7.x/bottts/svg?seed=SakibHasanOfficial');
 setDef.run('facebook_url', 'https://facebook.com');
 setDef.run('whatsapp_number', '+8801700000000');
+setDef.run('allowed_ips', '59.152.5.2,127.0.0.1,::1,localhost');
 
 export interface Room {
   id: string;
@@ -290,6 +291,47 @@ export const dbService = {
   updateSetting(key: string, value: string) {
     const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
     stmt.run(key, value);
+  },
+
+  getAllowedIps(): string[] {
+    const raw = this.getSettings()['allowed_ips'] || '59.152.5.2,127.0.0.1,::1,localhost';
+    return raw.split(',').map(s => s.trim()).filter(Boolean);
+  },
+
+  addAllowedIp(ip: string): string[] {
+    const clean = ip.trim();
+    if (!clean) return this.getAllowedIps();
+    const ips = this.getAllowedIps();
+    if (!ips.includes(clean)) {
+      ips.push(clean);
+      this.updateSetting('allowed_ips', ips.join(','));
+    }
+    return ips;
+  },
+
+  removeAllowedIp(ip: string): string[] {
+    const clean = ip.trim();
+    let ips = this.getAllowedIps();
+    ips = ips.filter(item => item !== clean);
+    if (ips.length === 0) {
+      ips = ['59.152.5.2'];
+    }
+    this.updateSetting('allowed_ips', ips.join(','));
+    return ips;
+  },
+
+  isIpAllowed(clientIp: string): boolean {
+    const cleanIp = (clientIp || '').trim().replace(/^::ffff:/, '');
+    const allowed = this.getAllowedIps().map(ip => ip.trim().replace(/^::ffff:/, ''));
+
+    if (allowed.includes(cleanIp)) return true;
+    if (cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp === 'localhost') return true;
+
+    for (const a of allowed) {
+      if (a === cleanIp) return true;
+      if (a.endsWith('*') && cleanIp.startsWith(a.slice(0, -1))) return true;
+    }
+    return false;
   },
 
   getSqlDump(): string {

@@ -23,7 +23,66 @@ const uploadsDir = path.resolve(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
-app.use('/uploads', express.static(uploadsDir));
+// Enhanced uploads handler with intelligent MIME detection (crucial for iOS/Safari WebM vs MP4 voice notes)
+app.use('/uploads', (req, res, next) => {
+  const requestedFile = path.basename(req.path);
+  let filePath = path.join(uploadsDir, requestedFile);
+
+  if (!fs.existsSync(filePath)) {
+    const lastDot = requestedFile.lastIndexOf('.');
+    if (lastDot > 0) {
+      const baseWithoutExt = requestedFile.substring(0, lastDot);
+      const possibleExts = ['.mp4', '.webm', '.wav', '.mp3', '.ogg', '.m4a'];
+      for (const altExt of possibleExts) {
+        const candidate = path.join(uploadsDir, baseWithoutExt + altExt);
+        if (fs.existsSync(candidate)) {
+          filePath = candidate;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    return next();
+  }
+
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const header = Buffer.alloc(16);
+    fs.readSync(fd, header, 0, 16, 0);
+    fs.closeSync(fd);
+
+    // If file has 'ftyp' at offset 4..8, it is ISO Media / MP4 / M4A (Safari iOS/macOS voice note)
+    if (header.subarray(4, 8).toString('ascii') === 'ftyp') {
+      res.setHeader('Content-Type', 'audio/mp4');
+    } else if (header.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
+      res.setHeader('Content-Type', 'audio/webm');
+    } else if (header.subarray(0, 4).toString('ascii') === 'RIFF') {
+      res.setHeader('Content-Type', 'audio/wav');
+    } else if (header.subarray(0, 3).toString('ascii') === 'ID3' || (header[0] === 0xff && (header[1] & 0xe0) === 0xe0)) {
+      res.setHeader('Content-Type', 'audio/mpeg');
+    } else if (header.subarray(0, 4).toString('ascii') === 'OggS') {
+      res.setHeader('Content-Type', 'audio/ogg');
+    }
+  } catch (e) {}
+
+  res.sendFile(filePath);
+});
+
+export function getClientIp(req: express.Request): string {
+  const xForwardedFor = req.headers['x-forwarded-for'];
+  if (typeof xForwardedFor === 'string') {
+    const firstIp = xForwardedFor.split(',')[0].trim();
+    return firstIp.replace(/^::ffff:/, '');
+  }
+  const realIp = req.headers['x-real-ip'];
+  if (typeof realIp === 'string') {
+    return realIp.trim().replace(/^::ffff:/, '');
+  }
+  const remoteAddress = req.socket?.remoteAddress || '';
+  return remoteAddress.replace(/^::ffff:/, '') || '127.0.0.1';
+}
 
 // WebSocket Client tracking
 interface ClientConnection {
@@ -187,25 +246,22 @@ wss.on('connection', (ws: WebSocket, req) => {
             }
           }
 
-          // Two-way mail-to-mail transmission:
-          // 1) Visitor text message -> emails Sakib Hasan (mesakibu4@gmail.com)
-          // 2) Sakib Hasan (admin) text message -> emails the visitor's email address
-          // Note: Only text messages are forwarded (files, photos, videos strictly excluded)
-          if (newMsg.message_type === 'text') {
-            const room = dbService.getRoom(roomId);
-            sendEmailNotification(newMsg, room ? { user_name: room.user_name, user_email: room.user_email } : undefined)
-              .then(res => {
-                broadcastToAdmins({
-                  type: 'email_dispatched',
-                  roomId,
-                  messageId: newMsg.id,
-                  status: res.status
-                });
-              })
-              .catch(err => {
-                console.error('Email dispatch error:', err);
+          // Two-way mail-to-mail transmission for all message types (text, voice, photo, file):
+          // 1) Visitor message -> emails Sakib Hasan (mesakibu4@gmail.com)
+          // 2) Sakib Hasan (admin) message -> emails visitor
+          const room = dbService.getRoom(roomId);
+          sendEmailNotification(newMsg, room ? { user_name: room.user_name, user_email: room.user_email } : undefined)
+            .then(res => {
+              broadcastToAdmins({
+                type: 'email_dispatched',
+                roomId,
+                messageId: newMsg.id,
+                status: res.status
               });
-          }
+            })
+            .catch(err => {
+              console.error('Email dispatch error:', err);
+            });
           break;
         }
 
@@ -335,10 +391,13 @@ wss.on('connection', (ws: WebSocket, req) => {
           const roomId = payload.roomId || clientInfo.roomId;
           if (!roomId) return;
 
-          // Forward peer signaling payload
+          // Forward peer signaling payload across room participants and operator admin
           for (const [targetWs, targetClient] of clients.entries()) {
             if (targetWs !== ws && targetWs.readyState === WebSocket.OPEN) {
-              if (targetClient.roomId === roomId) {
+              const isSameRoom = targetClient.roomId === roomId;
+              const isUserToAdmin = clientInfo.role === 'user' && targetClient.role === 'admin';
+              const isAdminToRoom = clientInfo.role === 'admin' && (targetClient.roomId === roomId || targetClient.role === 'user');
+              if (isSameRoom || isUserToAdmin || isAdminToRoom) {
                 targetWs.send(JSON.stringify(payload));
               }
             }
@@ -379,6 +438,39 @@ app.get('/api/status', (req, res) => {
     adminEmail: settings.admin_email || 'mesakibu4@gmail.com',
     sqliteFile: 'nexus_chat.sqlite',
     time: new Date().toISOString()
+  });
+});
+
+// IP Firewall Status & Management
+app.get('/api/admin/ip-status', (req, res) => {
+  const clientIp = getClientIp(req);
+  const isAllowed = dbService.isIpAllowed(clientIp);
+  const allowedIps = dbService.getAllowedIps();
+  res.json({
+    clientIp,
+    isAllowed,
+    allowedIps,
+    primaryIp: '59.152.5.2'
+  });
+});
+
+app.post('/api/admin/allowed-ips', (req, res) => {
+  const { ip, action } = req.body;
+  if (!ip || typeof ip !== 'string') {
+    return res.status(400).json({ error: 'IP address is required' });
+  }
+
+  let updatedIps: string[];
+  if (action === 'remove') {
+    updatedIps = dbService.removeAllowedIp(ip);
+  } else {
+    updatedIps = dbService.addAllowedIp(ip);
+  }
+
+  res.json({
+    success: true,
+    allowedIps: updatedIps,
+    clientIp: getClientIp(req)
   });
 });
 
@@ -469,11 +561,9 @@ app.post('/api/messages', async (req, res) => {
     }
   }
 
-  // Two-way mail-to-mail transmission for text messages
-  if (newMsg.message_type === 'text') {
-    const room = dbService.getRoom(roomId);
-    sendEmailNotification(newMsg, room ? { user_name: room.user_name, user_email: room.user_email } : undefined);
-  }
+  // Two-way mail-to-mail transmission for all message types
+  const room = dbService.getRoom(roomId);
+  sendEmailNotification(newMsg, room ? { user_name: room.user_name, user_email: room.user_email } : undefined);
 
   res.json({ success: true, message: newMsg });
 });
@@ -493,10 +583,12 @@ app.post('/api/upload', (req, res) => {
 
     if (matches && matches.length === 3) {
       buffer = Buffer.from(matches[2], 'base64');
-      const detectedMime = matches[1];
+      const detectedMime = matches[1].toLowerCase();
       if (detectedMime.includes('audio/webm')) ext = '.webm';
-      else if (detectedMime.includes('audio/wav')) ext = '.wav';
+      else if (detectedMime.includes('audio/mp4') || detectedMime.includes('audio/m4a') || detectedMime.includes('audio/aac')) ext = '.mp4';
+      else if (detectedMime.includes('audio/wav') || detectedMime.includes('audio/x-wav')) ext = '.wav';
       else if (detectedMime.includes('audio/mp3') || detectedMime.includes('audio/mpeg')) ext = '.mp3';
+      else if (detectedMime.includes('audio/ogg')) ext = '.ogg';
       else if (detectedMime.includes('image/png')) ext = '.png';
       else if (detectedMime.includes('image/jpeg')) ext = '.jpg';
       else if (detectedMime.includes('image/webp')) ext = '.webp';
@@ -507,6 +599,15 @@ app.post('/api/upload', (req, res) => {
 
     if (fileName && fileName.includes('.')) {
       ext = path.extname(fileName);
+    }
+
+    // Sniff buffer magic bytes to ensure exact format (e.g. Safari MP4 audio vs Chrome WebM)
+    if (buffer.length >= 8 && buffer.subarray(4, 8).toString('ascii') === 'ftyp') {
+      ext = '.mp4';
+    } else if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
+      ext = '.webm';
+    } else if (buffer.length >= 4 && buffer.subarray(0, 4).toString('ascii') === 'RIFF') {
+      ext = '.wav';
     }
 
     const uniqueName = 'file_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6) + ext;
@@ -523,6 +624,83 @@ app.post('/api/upload', (req, res) => {
   } catch (err: any) {
     console.error('Upload error:', err);
     res.status(500).json({ error: 'Upload failed: ' + err.message });
+  }
+});
+
+// 4b. Gemini AI Photo Editing endpoint
+app.post('/api/gemini/edit-image', async (req, res) => {
+  try {
+    const { imageBase64, prompt, mimeType = 'image/jpeg' } = req.body;
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'Image base64 data is required' });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: 'GEMINI_API_KEY is not configured in server secrets' });
+    }
+
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-flash-lite-image',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              data: cleanBase64,
+              mimeType: mimeType || 'image/jpeg',
+            },
+          },
+          {
+            text: prompt || 'Transform and enhance this portrait photo with professional studio lighting, clean background, sharp details, and artistic avatar retouching.',
+          },
+        ],
+      },
+    });
+
+    let generatedImageUrl: string | null = null;
+    let descriptionText = '';
+
+    for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+      if (part.inlineData?.data) {
+        const detectedMime = part.inlineData.mimeType ?? 'image/png';
+        const buffer = Buffer.from(part.inlineData.data, 'base64');
+        const ext = detectedMime.includes('png') ? '.png' : detectedMime.includes('webp') ? '.webp' : '.jpg';
+        const uniqueName = 'ai_photo_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6) + ext;
+        const savePath = path.join(uploadsDir, uniqueName);
+        fs.writeFileSync(savePath, buffer);
+        generatedImageUrl = `/uploads/${uniqueName}`;
+        break;
+      } else if (part.text) {
+        descriptionText += part.text;
+      }
+    }
+
+    if (generatedImageUrl) {
+      res.json({
+        success: true,
+        imageUrl: generatedImageUrl,
+        description: descriptionText,
+      });
+    } else {
+      res.status(500).json({
+        error: 'AI did not return an image output: ' + (descriptionText || 'No image output received'),
+      });
+    }
+  } catch (err: any) {
+    console.error('Gemini image edit error:', err);
+    res.status(500).json({ error: err.message || 'Gemini editing failed' });
   }
 });
 

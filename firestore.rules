@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'mesakibu4@gmail.com';
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection testing
+    match /test/connection {
+      allow read: if true;
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read: if true;
+      allow create, update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Rooms for Chat and Calls
+    match /rooms/{roomId} {
+      allow read, create, update: if true;
+      allow delete: if isAdmin();
+
+      // Realtime Messages inside room
+      match /messages/{messageId} {
+        allow read, create: if true;
+        allow update, delete: if isAdmin();
+      }
+
+      // Realtime WebRTC Calling Signals (Audio & Video Calling)
+      match /signals/{signalId} {
+        allow read, create, update, delete: if true;
+      }
+    }
+  }
+}

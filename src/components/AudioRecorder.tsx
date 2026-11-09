@@ -45,7 +45,27 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onSendAudio, onCan
       });
       streamRef.current = stream;
 
-      const mediaRecorder = new MediaRecorder(stream);
+      // Select best supported MIME type across Safari, Chrome, Firefox
+      const preferredMimes = [
+        'audio/webm;codecs=opus',
+        'audio/mp4',
+        'audio/aac',
+        'audio/webm',
+        'audio/ogg;codecs=opus'
+      ];
+      let selectedMime = '';
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
+        for (const mime of preferredMimes) {
+          if (MediaRecorder.isTypeSupported(mime)) {
+            selectedMime = mime;
+            break;
+          }
+        }
+      }
+
+      const mediaRecorder = selectedMime
+        ? new MediaRecorder(stream, { mimeType: selectedMime })
+        : new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -121,7 +141,8 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onSendAudio, onCan
     if (!mediaRecorderRef.current || !isRecording) return;
 
     mediaRecorderRef.current.onstop = () => {
-      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      const mime = mediaRecorderRef.current?.mimeType || 'audio/webm';
+      const audioBlob = new Blob(audioChunksRef.current, { type: mime });
       const reader = new FileReader();
       reader.onloadend = () => {
         const base64Data = reader.result as string;

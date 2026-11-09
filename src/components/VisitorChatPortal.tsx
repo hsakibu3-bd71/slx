@@ -7,7 +7,12 @@ import {
   Mic,
   CheckCheck,
   Lock,
-  Camera
+  Camera,
+  Sparkles,
+  MessageSquare,
+  ArrowLeft,
+  ShieldCheck,
+  Zap,
 } from 'lucide-react';
 import { Message, UserSession } from '../types';
 import { realtimeSocket } from '../services/websocket';
@@ -30,6 +35,7 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
   onStartCall,
   onGoToOperator,
 }) => {
+  const [hasStartedChat, setHasStartedChat] = useState(false);
   const [session, setSession] = useState<UserSession | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
@@ -78,11 +84,9 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
         }
       })
       .catch(() => {});
-
-    notificationService.requestPermission();
   }, []);
 
-  // Connect WebSocket
+  // Connect WebSocket & Dual Realtime Sync
   useEffect(() => {
     const userName = session?.name || 'Visitor';
     const userEmail = session?.email || 'visitor@gmail.com';
@@ -135,7 +139,6 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
     const unsubMsg = realtimeSocket.onMessage((msg) => {
       if (msg.room_id === roomId) {
         setMessages((prev) => [...prev, msg]);
-        // Trigger 100% active Real-Time Push Notification & Vibration to Display
         if (msg.sender_type === 'admin') {
           notificationService.show(
             'Sakib Hasan',
@@ -182,6 +185,7 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isInitialTyping, isRemoteTyping]);
 
+  // Contextual authentication guard (calls, voice notes, files)
   const requireAuth = (callback: () => void) => {
     if (!session || !session.isGoogleAuthenticated) {
       setIsAuthModalOpen(true);
@@ -200,103 +204,119 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
     }, 1200);
   };
 
+  // Immediate text messaging (zero auth barrier)
   const handleSendMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputText.trim()) return;
 
-    requireAuth(() => {
-      realtimeSocket.sendTyping(false);
-      realtimeSocket.sendMessage({
-        roomId,
-        sender_type: 'user',
-        sender_name: session!.name,
-        sender_email: session!.email,
-        sender_avatar: session!.avatar,
-        message_type: 'text',
-        text: inputText.trim(),
-      });
+    const senderName = session?.name || 'Visitor';
+    const senderEmail = session?.email || 'visitor@guest.com';
+    const senderAvatar = session?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${roomId}`;
 
-      soundEffects.playMessageSent();
-      setInputText('');
+    realtimeSocket.sendTyping(false);
+    realtimeSocket.sendMessage({
+      roomId,
+      sender_type: 'user',
+      sender_name: senderName,
+      sender_email: senderEmail,
+      sender_avatar: senderAvatar,
+      message_type: 'text',
+      text: inputText.trim(),
     });
+
+    soundEffects.playMessageSent();
+    setInputText('');
   };
 
   const handleSendAudio = (audioData: { base64Data: string; duration: number }) => {
-    requireAuth(() => {
-      setIsRecordingAudio(false);
+    setIsRecordingAudio(false);
 
-      fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          base64Data: audioData.base64Data,
-          fileName: `voice_${Date.now()}.webm`,
-          mimeType: 'audio/webm',
-        }),
+    const isMp4 = audioData.base64Data.includes('audio/mp4') || audioData.base64Data.includes('audio/aac');
+    const ext = isMp4 ? 'mp4' : 'webm';
+    const mime = isMp4 ? 'audio/mp4' : 'audio/webm';
+
+    const dispatchVoiceNote = (mediaUrl: string, fileSize?: number) => {
+      realtimeSocket.sendMessage({
+        roomId,
+        sender_type: 'user',
+        sender_name: session?.name || 'Visitor',
+        sender_email: session?.email || 'visitor@guest.com',
+        sender_avatar: session?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${roomId}`,
+        message_type: 'audio',
+        media_url: mediaUrl,
+        file_name: `Voice Note (${audioData.duration}s)`,
+        file_size: fileSize || Math.round(audioData.base64Data.length * 0.75),
+      });
+      soundEffects.playMessageSent();
+    };
+
+    fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base64Data: audioData.base64Data,
+        fileName: `voice_${Date.now()}.${ext}`,
+        mimeType: mime,
+      }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        dispatchVoiceNote(res.url || audioData.base64Data, res.fileSize);
       })
-        .then((r) => r.json())
-        .then((res) => {
-          if (res.url) {
-            realtimeSocket.sendMessage({
-              roomId,
-              sender_type: 'user',
-              sender_name: session!.name,
-              sender_email: session!.email,
-              sender_avatar: session!.avatar,
-              message_type: 'audio',
-              media_url: res.url,
-              file_name: `Voice Note (${audioData.duration}s)`,
-              file_size: res.fileSize,
-            });
-            soundEffects.playMessageSent();
-          }
-        });
-    });
+      .catch(() => {
+        // Direct fallback for Vercel / serverless deployments
+        dispatchVoiceNote(audioData.base64Data);
+      });
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    requireAuth(() => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64Data = reader.result as string;
-        const isImg = file.type.startsWith('image/');
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64Data = reader.result as string;
+      const isImg = file.type.startsWith('image/');
 
-        fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            base64Data,
-            fileName: file.name,
-            mimeType: file.type,
-          }),
-        })
-          .then((r) => r.json())
-          .then((res) => {
-            if (res.url) {
-              realtimeSocket.sendMessage({
-                roomId,
-                sender_type: 'user',
-                sender_name: session!.name,
-                sender_email: session!.email,
-                sender_avatar: session!.avatar,
-                message_type: isImg ? 'image' : 'file',
-                media_url: res.url,
-                file_name: file.name,
-                file_size: file.size,
-              });
-              soundEffects.playMessageSent();
-            }
-          });
+      const dispatchAttachment = (mediaUrl: string, fileSize?: number) => {
+        realtimeSocket.sendMessage({
+          roomId,
+          sender_type: 'user',
+          sender_name: session?.name || 'Visitor',
+          sender_email: session?.email || 'visitor@guest.com',
+          sender_avatar: session?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${roomId}`,
+          message_type: isImg ? 'image' : 'file',
+          media_url: mediaUrl,
+          file_name: file.name,
+          file_size: fileSize || file.size,
+        });
+        soundEffects.playMessageSent();
       };
-      reader.readAsDataURL(file);
-    });
+
+      fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base64Data,
+          fileName: file.name,
+          mimeType: file.type,
+        }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          dispatchAttachment(res.url || base64Data, res.fileSize);
+        })
+        .catch(() => {
+          // Direct fallback for Vercel / serverless deployments
+          dispatchAttachment(base64Data, file.size);
+        });
+    };
+    reader.readAsDataURL(file);
 
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  // Audio & Video Call access trigger
   const handleCallClick = (type: 'audio' | 'video') => {
     requireAuth(() => {
       notificationService.requestPermission();
@@ -305,11 +325,19 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
   };
 
   const handleSaveAvatar = (newAvatarUrl: string) => {
-    if (session) {
-      const updated = { ...session, avatar: newAvatarUrl };
-      setSession(updated);
-      localStorage.setItem('nexus_user_session', JSON.stringify(updated));
-    }
+    const updated: UserSession = session
+      ? { ...session, avatar: newAvatarUrl }
+      : {
+          id: 'user_' + Math.random().toString(36).substring(2, 9),
+          name: 'Visitor',
+          email: 'visitor@gmail.com',
+          avatar: newAvatarUrl,
+          isGoogleAuthenticated: false,
+          role: 'user',
+        };
+    setSession(updated);
+    localStorage.setItem('nexus_user_session', JSON.stringify(updated));
+
     // Update server & broadcast
     fetch(`/api/rooms/${roomId}/avatar`, {
       method: 'POST',
@@ -326,16 +354,166 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
   const cleanWhatsAppNumber = whatsappNumber.replace(/[^0-9]/g, '');
   const whatsappUrl = `https://wa.me/${cleanWhatsAppNumber}`;
 
+  // -------------------------------------------------------------
+  // STEP 1: INITIAL VISITOR PROFILE SCREEN (Sakib Hasan)
+  // Zero permission prompts on visit, clean professional landing
+  // -------------------------------------------------------------
+  if (!hasStartedChat) {
+    return (
+      <div className="min-h-screen w-full bg-black text-white flex flex-col justify-between p-4 sm:p-6 overflow-y-auto selection:bg-zinc-800">
+        {/* Minimal Top Brand Bar */}
+        <header className="flex items-center justify-between max-w-xl w-full mx-auto pt-2 pb-4">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-xs font-mono font-medium text-zinc-400 tracking-wider uppercase">
+              Direct Verified Channel
+            </span>
+          </div>
+          <button
+            onClick={onGoToOperator}
+            className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-zinc-500 hover:text-zinc-300 flex items-center justify-center transition-all text-xs"
+            title="Admin Access"
+          >
+            <Lock className="w-3.5 h-3.5" />
+          </button>
+        </header>
+
+        {/* Center Hero Card: Sakib Hasan */}
+        <div className="flex-1 flex flex-col items-center justify-center max-w-md w-full mx-auto my-6 text-center">
+          {/* Avatar with glowing ring */}
+          <div className="relative mb-6">
+            <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-3xl p-1 bg-gradient-to-b from-white/20 to-white/5 border border-white/15 shadow-2xl overflow-hidden group">
+              <img
+                src={adminAvatar}
+                alt="Sakib Hasan"
+                className="w-full h-full object-cover rounded-2xl group-hover:scale-105 transition-transform duration-300"
+              />
+            </div>
+            {/* Live Indicator Badge */}
+            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-black/95 border border-emerald-500/40 text-emerald-400 text-[10px] font-mono font-semibold flex items-center gap-1.5 shadow-lg whitespace-nowrap">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Online & Available</span>
+            </div>
+          </div>
+
+          {/* Name & Title */}
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white mb-1.5">
+            Sakib Hasan
+          </h1>
+          <p className="text-xs sm:text-sm text-zinc-400 font-medium mb-6 max-w-xs">
+            Direct Realtime Messaging, Voice Notes & Ultra-HD Calling
+          </p>
+
+          {/* Feature Highlights Grid */}
+          <div className="grid grid-cols-2 gap-2.5 w-full mb-6 text-left">
+            <div className="p-3 rounded-2xl bg-white/5 border border-white/10">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm">💬</span>
+                <span className="text-xs font-semibold text-white">Instant Chat</span>
+              </div>
+              <p className="text-[10px] text-zinc-400 leading-tight">
+                Send messages right away with zero upfront sign-up.
+              </p>
+            </div>
+            <div className="p-3 rounded-2xl bg-white/5 border border-white/10">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm">⚡</span>
+                <span className="text-xs font-semibold text-white">1080p Calling</span>
+              </div>
+              <p className="text-[10px] text-zinc-400 leading-tight">
+                High-definition WebRTC voice & video streaming.
+              </p>
+            </div>
+            <div className="p-3 rounded-2xl bg-white/5 border border-white/10">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm">🎙️</span>
+                <span className="text-xs font-semibold text-white">HD Voice</span>
+              </div>
+              <p className="text-[10px] text-zinc-400 leading-tight">
+                Studio-quality voice notes across iOS & Android.
+              </p>
+            </div>
+            <div className="p-3 rounded-2xl bg-white/5 border border-white/10">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm">✨</span>
+                <span className="text-xs font-semibold text-white">OGGy Studio</span>
+              </div>
+              <p className="text-[10px] text-zinc-400 leading-tight">
+                Creative Gemini AI photo transformation module.
+              </p>
+            </div>
+          </div>
+
+          {/* Big Start Chat Button */}
+          <button
+            onClick={() => setHasStartedChat(true)}
+            className="w-full py-4 px-6 rounded-2xl bg-white text-black font-bold text-sm sm:text-base flex items-center justify-center gap-2.5 hover:bg-zinc-200 active:scale-95 transition-all shadow-xl shadow-white/10"
+          >
+            <MessageSquare className="w-5 h-5 fill-current" />
+            <span>Start Chat</span>
+          </button>
+
+          {/* Social Icons (Facebook & WhatsApp) */}
+          <div className="flex items-center justify-center gap-3 mt-6">
+            <a
+              href={facebookUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-zinc-300 hover:text-white transition-all group"
+              title="Facebook Profile"
+            >
+              <svg className="w-4 h-4 fill-[#1877F2] group-hover:scale-110 transition-transform" viewBox="0 0 24 24">
+                <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+              </svg>
+              <span>Facebook</span>
+            </a>
+
+            <a
+              href={whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-zinc-300 hover:text-white transition-all group"
+              title="WhatsApp Direct"
+            >
+              <svg className="w-4 h-4 fill-[#25D366] group-hover:scale-110 transition-transform" viewBox="0 0 24 24">
+                <path d="M12.031 0C5.397 0 .016 5.382.016 12.016c0 2.12.553 4.192 1.606 6.012L.004 24l6.167-1.616c1.758.958 3.738 1.464 5.86 1.464 6.634 0 12.016-5.382 12.016-12.016S18.665 0 12.031 0zm0 21.996c-1.802 0-3.568-.484-5.109-1.398l-.367-.218-3.795.995 1.013-3.698-.239-.38a9.96 9.96 0 0 1-1.534-5.28c0-5.512 4.484-9.996 9.996-9.996 5.513 0 9.996 4.484 9.996 9.996 0 5.513-4.483 9.996-9.996 9.996zm5.474-7.491c-.3-.15-1.774-.875-2.049-.975-.275-.1-.475-.15-.675.15-.2.3-.775.975-.95 1.175-.175.2-.35.225-.65.075-.3-.15-1.266-.467-2.411-1.488-.891-.795-1.493-1.777-1.668-2.077-.175-.3-.019-.462.131-.611.135-.134.3-.35.45-.525.15-.175.2-.3.3-.5.1-.2.05-.375-.025-.525s-.675-1.625-.925-2.225c-.244-.583-.492-.504-.675-.513l-.575-.01c-.2 0-.525.075-.8.375s-1.05 1.025-1.05 2.5 1.075 2.9 1.225 3.1c.15.2 2.116 3.231 5.127 4.532.716.31 1.275.495 1.71.633.72.229 1.375.197 1.893.12.577-.086 1.774-.725 2.024-1.425.25-.7.25-1.3.175-1.425-.075-.125-.275-.2-.575-.35z"/>
+              </svg>
+              <span>WhatsApp</span>
+            </a>
+          </div>
+        </div>
+
+        {/* Footer / App Install Bar */}
+        <div className="w-full max-w-xl mx-auto pb-2">
+          <AppInstallBar />
+        </div>
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------
+  // STEP 2: CHAT PORTAL SCREEN (After clicking 'Start Chat')
+  // Visitors can type & send immediately, call/voice/files ask for access
+  // -------------------------------------------------------------
   return (
     <div className="flex flex-col h-screen w-full bg-black text-white overflow-hidden secure-screen-content">
-      {/* Top Header: Left: Sakib Hasan Photo + Connected Visitor Photo + 'Sakib Hasan' Logo | Right: Audio & Video Call Icons */}
-      <header className="flex items-center justify-between px-4 sm:px-6 py-3 bg-black border-b border-white/10 shrink-0 z-20">
-        <div className="flex items-center gap-3">
-          {/* Side-by-side Photos: Sakib Hasan's photo + Connected Visitor's photo */}
+      {/* Top Header: Left: Back to Profile + Sakib Hasan Photo + Visitor Photo | Right: Audio & Video Call Icons */}
+      <header className="flex items-center justify-between px-3 sm:px-6 py-2.5 bg-black border-b border-white/10 shrink-0 z-20">
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Back button to return to profile landing */}
+          <button
+            onClick={() => setHasStartedChat(false)}
+            className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-zinc-400 hover:text-white transition-all shrink-0"
+            title="Back to Sakib Hasan Profile"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+
+          {/* Side-by-side Photos */}
           <div className="flex items-center -space-x-2 shrink-0">
             {/* Sakib Hasan's Photo */}
             <div
-              className="relative w-9 h-9 rounded-full ring-2 ring-black border border-white/30 overflow-hidden bg-zinc-900 shrink-0"
+              className="relative w-8 h-8 sm:w-9 sm:h-9 rounded-full ring-2 ring-black border border-white/30 overflow-hidden bg-zinc-900 shrink-0"
               title="Sakib Hasan (Online)"
             >
               <img
@@ -343,20 +521,14 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
                 alt="Sakib Hasan"
                 className="w-full h-full object-cover"
               />
-              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-black" />
+              <span className="absolute bottom-0 right-0 w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-emerald-400 ring-2 ring-black" />
             </div>
 
             {/* Connected Visitor's Photo */}
             <button
-              onClick={() => {
-                if (session && session.isGoogleAuthenticated) {
-                  setIsAvatarModalOpen(true);
-                } else {
-                  setIsAuthModalOpen(true);
-                }
-              }}
-              className="relative w-9 h-9 rounded-full ring-2 ring-black border border-white/30 overflow-hidden bg-zinc-800 hover:ring-white/50 transition-all shrink-0 group"
-              title={session?.name ? `${session.name} (Click to set photo)` : 'Sign in / Set Photo'}
+              onClick={() => setIsAvatarModalOpen(true)}
+              className="relative w-8 h-8 sm:w-9 sm:h-9 rounded-full ring-2 ring-black border border-white/30 overflow-hidden bg-zinc-800 hover:ring-white/50 transition-all shrink-0 group"
+              title={session?.name ? `${session.name} (Click to set photo)` : 'Customize your photo'}
             >
               <img
                 src={session?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${roomId}`}
@@ -370,18 +542,23 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
           </div>
 
           {/* Logo strictly 'Sakib Hasan' */}
-          <span className="text-lg sm:text-xl font-bold tracking-tight text-white whitespace-nowrap">
-            Sakib Hasan
-          </span>
+          <div className="flex flex-col">
+            <span className="text-sm sm:text-base font-bold tracking-tight text-white whitespace-nowrap">
+              Sakib Hasan
+            </span>
+            <span className="text-[10px] text-emerald-400 font-mono -mt-0.5 hidden sm:inline">
+              Online
+            </span>
+          </div>
         </div>
 
-        {/* Right side: Audio Call & Video Call Icons (pure icons, no text) */}
-        <div className="flex items-center gap-2">
+        {/* Right side: Audio Call & Video Call Icons (asks for access when clicked) */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {/* Audio Call Icon */}
           <button
             onClick={() => handleCallClick('audio')}
-            className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all border border-white/15"
-            title="Audio Call"
+            className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all border border-white/15"
+            title="Audio Call (Access Required)"
           >
             <Phone className="w-4 h-4" />
           </button>
@@ -389,15 +566,15 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
           {/* Video Call Icon */}
           <button
             onClick={() => handleCallClick('video')}
-            className="w-9 h-9 rounded-full bg-white text-black hover:bg-zinc-200 flex items-center justify-center transition-all shadow-md"
-            title="Video Call"
+            className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white text-black hover:bg-zinc-200 flex items-center justify-center transition-all shadow-md"
+            title="Video Call (Access Required)"
           >
             <Video className="w-4 h-4 fill-current" />
           </button>
 
           <button
             onClick={onGoToOperator}
-            className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 text-zinc-500 hover:text-zinc-300 flex items-center justify-center transition-all text-xs font-mono ml-1"
+            className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 text-zinc-500 hover:text-zinc-300 flex items-center justify-center transition-all text-xs font-mono ml-0.5"
             title="Switch"
           >
             /
@@ -480,56 +657,67 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
                     </div>
                   )}
 
-                  {/* Document Card (Protected View) */}
+                  {/* Document / Generic File */}
                   {msg.message_type === 'file' && (
-                    <div className="flex items-center gap-2.5 p-2.5 rounded-xl bg-black/40 border border-white/10 select-none">
-                      <div className="p-2 rounded-lg bg-white/10 text-white shrink-0">
-                        <Lock className="w-4 h-4 text-emerald-400" />
-                      </div>
+                    <div
+                      onClick={() =>
+                        setSelectedFile({
+                          url: msg.media_url || '',
+                          name: msg.file_name || 'Attachment',
+                          isImage: false,
+                          size: msg.file_size,
+                        })
+                      }
+                      className="flex items-center gap-2 p-2 rounded-xl bg-white/5 hover:bg-white/10 cursor-pointer border border-white/10 transition-colors"
+                    >
+                      <Paperclip className="w-4 h-4 text-zinc-300 shrink-0" />
                       <div className="min-w-0">
-                        <div className="text-xs font-semibold text-white truncate max-w-[190px]">
-                          {msg.file_name}
-                        </div>
-                        <div className="text-[10px] text-zinc-400 font-mono">
-                          {Math.round((msg.file_size || 0) / 1024)} KB · Protected File
-                        </div>
+                        <p className="text-xs text-white font-medium truncate">{msg.file_name || 'Attachment'}</p>
+                        {msg.file_size && (
+                          <p className="text-[10px] text-zinc-400 font-mono">
+                            {(msg.file_size / 1024).toFixed(1)} KB
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
 
-                  {/* Timestamp & WhatsApp Double Checkmarks */}
-                  <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-zinc-400 font-mono">
+                  {/* Message Timestamp & Checkmarks */}
+                  <div
+                    className={`flex items-center gap-1 mt-1 text-[10px] ${
+                      isSelf ? 'text-zinc-400 justify-end' : 'text-zinc-500 justify-start'
+                    } font-mono`}
+                  >
                     <span>
-                      {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {new Date(msg.created_at).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
                     </span>
-                    {isSelf && (
-                      <CheckCheck className="w-3.5 h-3.5 text-sky-400 ml-0.5 inline-block" />
-                    )}
+                    {isSelf && <CheckCheck className="w-3 h-3 text-white" />}
                   </div>
                 </div>
               </div>
             );
           })}
 
-          {/* Typing Indicator: Appears on entry and live when typing */}
+          {/* Typing indicator: Operator is typing... */}
           {(isInitialTyping || isRemoteTyping) && (
-            <div className="flex flex-col items-start animate-in fade-in duration-150">
-              <div className="p-3 px-4 rounded-2xl glossy-bubble-operator flex items-center gap-2.5">
-                <span className="text-xs text-white">Sakib Hasan is typing</span>
-                <div className="flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '300ms' }} />
-                </div>
+            <div className="flex items-center gap-2 p-2.5 px-4 rounded-xl bg-white/5 border border-white/10 w-fit animate-in fade-in">
+              <div className="flex gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:-0.3s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:-0.15s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" />
               </div>
+              <span className="text-xs text-zinc-400 font-medium">Sakib Hasan is typing...</span>
             </div>
           )}
 
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Messenger-Style Chat Dock */}
-        <div className="p-2 sm:p-2.5 rounded-2xl glossy-card shrink-0">
+        {/* Input Bar: Paperclip (Access Req) | Voice Note (Access Req) | OGGy AI | Message Input | Send */}
+        <div className="shrink-0 mb-1">
           {isRecordingAudio ? (
             <AudioRecorder
               onSendAudio={handleSendAudio}
@@ -537,7 +725,7 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
             />
           ) : (
             <form onSubmit={handleSendMessage} className="flex items-center gap-1.5 sm:gap-2">
-              {/* File / Image Share */}
+              {/* File / Image Share (Prompts access when clicked) */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -546,29 +734,39 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
               />
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="p-2.5 rounded-full bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white transition-colors"
-                title="Share photo or file"
+                onClick={() => requireAuth(() => fileInputRef.current?.click())}
+                className="p-2.5 rounded-full bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white transition-colors shrink-0"
+                title="Share photo or file (Access Required)"
               >
                 <Paperclip className="w-4 h-4" />
               </button>
 
-              {/* Voice Note Mic */}
+              {/* Voice Note Mic (Prompts access when clicked) */}
               <button
                 type="button"
-                onClick={() => setIsRecordingAudio(true)}
-                className="p-2.5 rounded-full bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white transition-colors"
-                title="Voice Note"
+                onClick={() => requireAuth(() => setIsRecordingAudio(true))}
+                className="p-2.5 rounded-full bg-white/5 hover:bg-white/15 text-zinc-300 hover:text-white transition-colors shrink-0"
+                title="Voice Note (Access Required)"
               >
                 <Mic className="w-4 h-4" />
               </button>
 
-              {/* Message Input Box */}
+              {/* OGGy AI Photo Editor */}
+              <button
+                type="button"
+                onClick={() => setIsAvatarModalOpen(true)}
+                className="p-2.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 hover:text-white border border-purple-500/30 transition-all shrink-0"
+                title="OGGy AI Photo Studio"
+              >
+                <Sparkles className="w-4 h-4" />
+              </button>
+
+              {/* Message Input Box: Instant Typing */}
               <input
                 type="text"
                 value={inputText}
                 onChange={handleInputChange}
-                placeholder="Type a message..."
+                placeholder="Type a message to Sakib Hasan..."
                 className="flex-1 px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-white/30 min-w-0"
               />
 
@@ -585,26 +783,26 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
         </div>
 
         {/* Underneath Chat: Facebook (Left) | Google (Middle - Login) | WhatsApp (Right) */}
-        <div className="flex items-center justify-between px-6 py-2.5 mt-1 shrink-0">
+        <div className="flex items-center justify-between px-6 py-2 shrink-0">
           {/* Left: Facebook Logo linking to profile */}
           <a
             href={facebookUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="w-10 h-10 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 hover:border-white/30 flex items-center justify-center transition-all group"
+            className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 hover:border-white/30 flex items-center justify-center transition-all group"
             title="Sakib Hasan Facebook Profile"
           >
-            <svg className="w-5 h-5 fill-[#1877F2] group-hover:scale-110 transition-transform" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 fill-[#1877F2] group-hover:scale-110 transition-transform" viewBox="0 0 24 24">
               <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
             </svg>
           </a>
 
-          {/* Middle: Google Logo (Click to Login) */}
+          {/* Middle: Google Logo (Click to Login / Check session) */}
           <button
             type="button"
             onClick={() => setIsAuthModalOpen(true)}
-            className="w-10 h-10 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 hover:border-white/30 flex items-center justify-center transition-all group p-2"
-            title="Google Sign-In"
+            className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 hover:border-white/30 flex items-center justify-center transition-all group p-2"
+            title={session?.isGoogleAuthenticated ? `Signed in as ${session.name}` : 'Sign in with Google'}
           >
             <svg className="w-full h-full group-hover:scale-110 transition-transform" viewBox="0 0 24 24">
               <path
@@ -631,10 +829,10 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
             href={whatsappUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="w-10 h-10 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 hover:border-white/30 flex items-center justify-center transition-all group"
+            className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 hover:border-white/30 flex items-center justify-center transition-all group"
             title="Chat on WhatsApp"
           >
-            <svg className="w-5 h-5 fill-[#25D366] group-hover:scale-110 transition-transform" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 fill-[#25D366] group-hover:scale-110 transition-transform" viewBox="0 0 24 24">
               <path d="M12.031 0C5.397 0 .016 5.382.016 12.016c0 2.12.553 4.192 1.606 6.012L.004 24l6.167-1.616c1.758.958 3.738 1.464 5.86 1.464 6.634 0 12.016-5.382 12.016-12.016S18.665 0 12.031 0zm0 21.996c-1.802 0-3.568-.484-5.109-1.398l-.367-.218-3.795.995 1.013-3.698-.239-.38a9.96 9.96 0 0 1-1.534-5.28c0-5.512 4.484-9.996 9.996-9.996 5.513 0 9.996 4.484 9.996 9.996 0 5.513-4.483 9.996-9.996 9.996zm5.474-7.491c-.3-.15-1.774-.875-2.049-.975-.275-.1-.475-.15-.675.15-.2.3-.775.975-.95 1.175-.175.2-.35.225-.65.075-.3-.15-1.266-.467-2.411-1.488-.891-.795-1.493-1.777-1.668-2.077-.175-.3-.019-.462.131-.611.135-.134.3-.35.45-.525.15-.175.2-.3.3-.5.1-.2.05-.375-.025-.525s-.675-1.625-.925-2.225c-.244-.583-.492-.504-.675-.513l-.575-.01c-.2 0-.525.075-.8.375s-1.05 1.025-1.05 2.5 1.075 2.9 1.225 3.1c.15.2 2.116 3.231 5.127 4.532.716.31 1.275.495 1.71.633.72.229 1.375.197 1.893.12.577-.086 1.774-.725 2.024-1.425.25-.7.25-1.3.175-1.425-.075-.125-.275-.2-.575-.35z"/>
             </svg>
           </a>
@@ -645,15 +843,13 @@ export const VisitorChatPortal: React.FC<VisitorChatPortalProps> = ({
       <AppInstallBar />
 
       {/* Profile Photo Customization Modal */}
-      {session && (
-        <AvatarModal
-          isOpen={isAvatarModalOpen}
-          onClose={() => setIsAvatarModalOpen(false)}
-          currentAvatar={session.avatar}
-          userName={session.name}
-          onSaveAvatar={handleSaveAvatar}
-        />
-      )}
+      <AvatarModal
+        isOpen={isAvatarModalOpen}
+        onClose={() => setIsAvatarModalOpen(false)}
+        currentAvatar={session?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${roomId}`}
+        userName={session?.name || 'Visitor'}
+        onSaveAvatar={handleSaveAvatar}
+      />
 
       {/* Google Sign-in Modal */}
       <GoogleAuthModal

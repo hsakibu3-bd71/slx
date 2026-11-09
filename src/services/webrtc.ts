@@ -6,7 +6,13 @@ const rtcConfig: RTCConfiguration = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    { urls: 'stun:stun.services.mozilla.com' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'stun:stun.voipbuster.com' },
   ],
+  iceCandidatePoolSize: 10,
 };
 
 export class WebRTCManager {
@@ -21,6 +27,7 @@ export class WebRTCManager {
   private onRemoteStreamCb: ((stream: MediaStream) => void) | null = null;
   private onCallEndCb: (() => void) | null = null;
   private onAudioLevelCb: ((level: number) => void) | null = null;
+  private candidateQueue: RTCIceCandidateInit[] = [];
 
   private roomId: string = '';
   private callType: 'audio' | 'video' = 'video';
@@ -147,6 +154,7 @@ export class WebRTCManager {
     if (!this.pc) return;
 
     await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
+    await this.flushCandidateQueue();
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
 
@@ -160,15 +168,31 @@ export class WebRTCManager {
   async handleAnswer(answer: RTCSessionDescriptionInit) {
     if (this.pc && this.pc.signalingState !== 'closed') {
       await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+      await this.flushCandidateQueue();
     }
   }
 
   async handleCandidate(candidate: RTCIceCandidateInit) {
-    if (this.pc && this.pc.remoteDescription) {
+    if (this.pc && this.pc.remoteDescription && this.pc.remoteDescription.type) {
       try {
         await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (e) {
         console.warn('Error adding ice candidate', e);
+      }
+    } else {
+      this.candidateQueue.push(candidate);
+    }
+  }
+
+  private async flushCandidateQueue() {
+    while (this.candidateQueue.length > 0) {
+      const candidate = this.candidateQueue.shift();
+      if (candidate && this.pc && this.pc.remoteDescription) {
+        try {
+          await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.warn('Error adding queued ice candidate', e);
+        }
       }
     }
   }

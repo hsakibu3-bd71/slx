@@ -1,6 +1,6 @@
 {
   "name": "Sakib Hasan -Real Time chating and call",
-  "description": "",
+  "description": "Direct realtime messaging, ultra-HD voice and video calls with Sakib Hasan.",
   "requestFramePermissions": [
     "camera",
     "microphone",

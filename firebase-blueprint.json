@@ -1,0 +1,79 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 128 },
+        "avatar": { "type": "string", "maxLength": 500 },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "email", "name"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Chat message record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "roomId": { "type": "string", "maxLength": 128 },
+        "senderType": { "type": "string", "enum": ["user", "admin", "system"] },
+        "senderName": { "type": "string", "maxLength": 100 },
+        "senderEmail": { "type": "string", "maxLength": 128 },
+        "messageType": { "type": "string", "enum": ["text", "audio", "image", "file", "call_log"] },
+        "text": { "type": "string", "maxLength": 5000 },
+        "mediaUrl": { "type": "string", "maxLength": 500000 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["roomId", "senderType", "messageType"]
+    },
+    "ChatRoom": {
+      "title": "ChatRoom",
+      "description": "Chat room record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userName": { "type": "string", "maxLength": 100 },
+        "userEmail": { "type": "string", "maxLength": 128 },
+        "userAvatar": { "type": "string", "maxLength": 500 },
+        "isOnline": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userName"]
+    },
+    "WebRTCSignal": {
+      "title": "WebRTCSignal",
+      "description": "Realtime WebRTC call signal",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "maxLength": 64 },
+        "roomId": { "type": "string", "maxLength": 128 },
+        "fromSessionId": { "type": "string", "maxLength": 128 },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["type", "roomId", "fromSessionId", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Registered user profile records"
+    },
+    "/rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/ChatRoom" },
+      "description": "Chat rooms for visitors and operator"
+    },
+    "/rooms/{roomId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Messages sent within a chat room"
+    },
+    "/rooms/{roomId}/signals/{signalId}": {
+      "schema": { "$ref": "#/entities/WebRTCSignal" },
+      "description": "Realtime WebRTC signaling events for voice and video calling"
+    }
+  }
+}

@@ -29,6 +29,7 @@ export const CallModal: React.FC<CallModalProps> = ({
 }) => {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const [duration, setDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoDisabled, setIsVideoDisabled] = useState(false);
@@ -50,7 +51,7 @@ export const CallModal: React.FC<CallModalProps> = ({
     };
   }, [callState.isActive]);
 
-  // Hook up video elements when active
+  // Hook up video and audio elements when active
   useEffect(() => {
     if (callState.isActive) {
       if (localVideoRef.current && webrtcService.localStream) {
@@ -58,6 +59,11 @@ export const CallModal: React.FC<CallModalProps> = ({
       }
       if (remoteVideoRef.current && webrtcService.remoteStream) {
         remoteVideoRef.current.srcObject = webrtcService.remoteStream;
+        remoteVideoRef.current.play().catch(() => {});
+      }
+      if (remoteAudioRef.current && webrtcService.remoteStream) {
+        remoteAudioRef.current.srcObject = webrtcService.remoteStream;
+        remoteAudioRef.current.play().catch(() => {});
       }
     }
   }, [callState.isActive, webrtcService.localStream, webrtcService.remoteStream]);
@@ -192,6 +198,9 @@ export const CallModal: React.FC<CallModalProps> = ({
 
         {/* Call Viewport */}
         <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
+          {/* Universal Audio Output Element for WebRTC remote stream */}
+          <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+
           {callState.callType === 'video' ? (
             <>
               {/* Remote Video Stream */}

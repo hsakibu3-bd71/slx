@@ -46,48 +46,8 @@ export const SensorPrivacyShield: React.FC<SensorPrivacyShieldProps> = ({
       }
     };
 
-    // 3. Ambient Light & Front Camera Proximity Sensor Listener
-    let lightSensor: any = null;
-    let proximitySensor: any = null;
-
-    try {
-      if ('AmbientLightSensor' in window) {
-        // @ts-ignore
-        lightSensor = new window.AmbientLightSensor({ frequency: 10 });
-        let baselineLux: number | null = null;
-
-        lightSensor.onreading = () => {
-          const lux = lightSensor.illuminance;
-          if (baselineLux === null) {
-            baselineLux = lux;
-          } else if (baselineLux > 15 && lux < 4) {
-            // Sudden severe occlusion over top camera/sensor (another phone hovering)
-            triggerVanish('Top camera ambient sensor occluded: Foreign device/camera detected hovering above screen');
-          }
-        };
-
-        lightSensor.onerror = () => {
-          // Sensor permission fallback
-        };
-
-        lightSensor.start();
-        setSensorStatus('active');
-      }
-
-      // @ts-ignore
-      if ('ProximitySensor' in window) {
-        // @ts-ignore
-        proximitySensor = new window.ProximitySensor();
-        proximitySensor.onreading = () => {
-          if (proximitySensor.near) {
-            triggerVanish('Top proximity sensor triggered: Foreign object/camera detected');
-          }
-        };
-        proximitySensor.start();
-      }
-    } catch (e) {
-      // Sensor API permission handling
-    }
+    // 3. Sensor standby (zero permission prompts on visit)
+    setSensorStatus('active');
 
     // 4. Block Context Menu (Right Click) & Dragging
     const handleContextMenu = (e: MouseEvent) => {
@@ -110,9 +70,6 @@ export const SensorPrivacyShield: React.FC<SensorPrivacyShieldProps> = ({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       document.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('dragstart', handleDragStart);
-
-      if (lightSensor) lightSensor.stop();
-      if (proximitySensor) proximitySensor.stop();
     };
   }, []);
 
