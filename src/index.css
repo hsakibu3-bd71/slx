@@ -1,0 +1,108 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  html, body, #root {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: #000000 !important;
+    color: #ffffff;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+}
+
+/* 100% Pure Pitch Black Background */
+.nexus-bg-gradient {
+  background-color: #000000 !important;
+  min-height: 100vh;
+}
+
+/* Glossy Glassmorphism Effect for message card bodies and UI containers */
+.glossy-card {
+  background: rgba(18, 18, 18, 0.65);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6), inset 0 1px 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.glossy-bubble-user {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0.08) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
+.glossy-bubble-operator {
+  background: linear-gradient(135deg, rgba(28, 28, 30, 0.8) 0%, rgba(18, 18, 20, 0.8) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+/* WhatsApp-style and Anti-Screenshot Protection */
+.secure-screen-content {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Pure Dark Glossy Glass Cards for Chat Bubbles - Zero Blue/Green Tint */
+.glossy-bubble-user, .wa-bubble-user-glossy, .wa-bubble-user {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.08) 100%) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  color: #ffffff !important;
+  border-radius: 18px 18px 3px 18px;
+}
+
+.glossy-bubble-operator, .wa-bubble-operator-glossy, .wa-bubble-operator {
+  background: linear-gradient(135deg, rgba(32, 32, 35, 0.9) 0%, rgba(18, 18, 20, 0.9) 100%) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  color: #ffffff !important;
+  border-radius: 18px 18px 18px 3px;
+}
+
+/* Ensure all message text is pure stark white */
+.glossy-bubble-user p,
+.glossy-bubble-operator p,
+.wa-bubble-user-glossy p,
+.wa-bubble-operator-glossy p,
+.wa-bubble-user p,
+.wa-bubble-operator p {
+  color: #ffffff !important;
+}
+
+/* Blur protection on window blur / app switcher */
+.app-blur-shield {
+  filter: blur(25px) brightness(0.2);
+  pointer-events: none;
+  transition: filter 0.15s ease;
+}
+
+/* Custom dark scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.4);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
